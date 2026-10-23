@@ -120,10 +120,9 @@ pip install -r requirements.txt
      `~/CoppeliaSim_Edu_.../`
 
 ### 2. Verify the ZeroMQ Remote API Server
-In CoppeliaSim version 4.3.0 and newer (including 4.10.0), the **ZeroMQ Remote API Server** is built-in and starts automatically when CoppeliaSim launches.
-- Default listening host: `127.0.0.1` (localhost)
-- Default listening port: `23004`
+- Configured project listening port: `23000` (defined in `config/settings.py`; CoppeliaSim ZMQ server operates on port `23000` or `23004`)
 - You can confirm it is running in CoppeliaSim under the menu **Add-ons -> ZMQ remote API server** (it should show a checkmark or indicate running in the status bar console).
+
 
 ### 3. Open the Project Scene
 1. Launch **CoppeliaSim Edu**.
@@ -290,12 +289,13 @@ git push -u origin feature/your-feature-name
 ## 9. Troubleshooting & Common Issues
 
 ### Issue 1: `Connection refused` or `Timeout` in `test_connection.py`
-- **Cause**: CoppeliaSim is not open, or the ZeroMQ Remote API server is not running on port `23004`.
+- **Cause**: CoppeliaSim is not open, or the ZeroMQ Remote API server is not running on port `23000`.
 - **Fix**:
   1. Make sure CoppeliaSim Edu is running.
   2. In CoppeliaSim, check **Add-ons -> ZMQ remote API server** to ensure it is active.
-  3. Ensure no local firewall is blocking port `23004` on loopback `127.0.0.1`.
+  3. Ensure no local firewall is blocking port `23000` on loopback `127.0.0.1`.
   4. If your CoppeliaSim uses a custom port, update `ZMQ_PORT` in `config/settings.py`.
+
 
 ### Issue 2: `Model file not found at: C:\Program Files\CoppeliaRobotics\...`
 - **Cause**: `scene/build_scene.py` looks for default model files (UR5, RG2, Conveyor) in the standard CoppeliaSim installation path. If CoppeliaSim is installed in a non-standard location or on Linux/macOS, paths may differ.
