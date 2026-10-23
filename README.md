@@ -2,7 +2,11 @@
 
 An autonomous industrial pick-and-place sorting cell simulation built with CoppeliaSim Edu and Python via the ZeroMQ Remote API.
 
+> 📖 **Looking to fork and run this project on your system?**  
+> Check out the complete step-by-step [**Contributor & Setup Guide (CONTRIBUTING.md)**](file:///d:/industrial-robot-sorter/CONTRIBUTING.md) for installation, virtual environments, CoppeliaSim ZeroMQ setup, and test execution!
+
 ---
+
 
 ## Project Structure
 
@@ -27,10 +31,12 @@ d:/industrial-robot-sorter/
 ├── scenes/
 │   └── sorting_factory.ttt  # Persisted CoppeliaSim binary scene (1.6 MB)
 ├── .gitignore               # Comprehensive Git ignore rules
+├── CONTRIBUTING.md          # Step-by-step fork, installation, and setup guide
 ├── requirements.txt         # Project dependencies
 ├── test_connection.py       # Basic connectivity test from Phase 1
 └── README.md
 ```
+
 
 ---
 
