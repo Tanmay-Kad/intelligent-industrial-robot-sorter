@@ -1,11 +1,12 @@
 """
-Automated Sorting Orchestration Controller (Phase 4)
+Automated Sorting Orchestration Controller (Phase 4 & Phase 5)
 Integrates:
 - /InspectionCamera Vision & OpenCV HSV Color Classification (Red, Green, Blue)
 - UR5 6-DOF Robot Kinematics & High-Elbow Collision-Free Trajectories
 - RG2 Gripper Parallel Jaw Mechanical Actuation & Physics Grasping
 - Conveyor Belts (Input feed & 3 Color-Coded Discharge Conveyors)
 - 3 Open-Top Collection Bins with Real Physics Containment Verification
+- Dynamic Object Spawner & Continuous Queue Lifecycle Tracking (Phase 5)
 """
 
 import sys
@@ -20,6 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from core.sim_client import get_sim_client
 from robot.robot_controller import UR5Controller
 from vision.color_detector import ColorDetector, DetectionResult
+from src.object_spawner import ObjectSpawner, SpawnedObject, ObjectState
 import config.settings as cfg
 
 
@@ -27,7 +29,7 @@ class SortingController:
     """
     Automated Industrial Sorting Orchestrator.
     Manages camera-based inspection, color decision routing, robot pick-and-place,
-    conveyor transport, and bin containment tracking.
+    conveyor transport, dynamic spawning, and continuous queue containment tracking.
     """
 
     SUPPORTED_COLORS = ["red", "green", "blue"]
@@ -38,6 +40,7 @@ class SortingController:
         sim: Any,
         output_conveyor_vel: float = 0.25,
         input_conveyor_vel: float = 0.15,
+        spawner: Optional[ObjectSpawner] = None,
     ):
         """
         Initializes the SortingController.
@@ -47,11 +50,13 @@ class SortingController:
             sim: CoppeliaSim sim module.
             output_conveyor_vel: Target speed for output conveyors (m/s).
             input_conveyor_vel: Target feed speed for input conveyor (m/s).
+            spawner: Optional ObjectSpawner instance for dynamic object feeding.
         """
         self.client = client
         self.sim = sim
         self.output_conveyor_vel = output_conveyor_vel
         self.input_conveyor_vel = input_conveyor_vel
+        self.spawner = spawner
 
         # Robot controller & Vision detector
         self.robot = UR5Controller(client, sim)
@@ -65,7 +70,7 @@ class SortingController:
             "blue": self.sim.getObject("/OutputConveyorBlue"),
         }
 
-        # Resolve block handles (used only for post-classification physics & validation)
+        # Resolve initial block handles (used for Phase 4 static tests & fallback)
         self.blocks = {
             "red": self.sim.getObject("/RedBlock"),
             "green": self.sim.getObject("/GreenBlock"),
@@ -83,6 +88,24 @@ class SortingController:
             "bin_failures": 0,
         }
         self.history: List[Dict[str, Any]] = []
+
+    def setup_spawner(
+        self,
+        spawn_pos: Optional[List[float]] = None,
+        color_sequence: Optional[List[str]] = None,
+        color_distribution: Optional[Dict[str, float]] = None,
+        min_spacing: float = 0.22,
+    ) -> ObjectSpawner:
+        """Configures or initializes the dynamic object spawner."""
+        self.spawner = ObjectSpawner(
+            client=self.client,
+            sim=self.sim,
+            spawn_pos=spawn_pos,
+            color_sequence=color_sequence,
+            color_distribution=color_distribution,
+            min_spacing=min_spacing,
+        )
+        return self.spawner
 
     def initialize_system(self):
         """Prepares robot, conveyors, and grippers for clean operational sorting."""
@@ -137,23 +160,36 @@ class SortingController:
     def identify_block_at_pick_station(self) -> Optional[int]:
         """
         Identifies which physical block is currently resting at the pick station.
-        Used strictly for physical grasp attachment and ground-truth validation.
+        Checks dynamically spawned objects first, then falls back to initial scene blocks.
         """
         pick_station_x = -0.375
+
+        # 1. Check dynamically spawned objects
+        if self.spawner is not None:
+            for handle in self.spawner.objects:
+                try:
+                    p = self.sim.getObjectPosition(handle, -1)
+                    if abs(p[0] - pick_station_x) < 0.08 and abs(p[1]) < 0.08 and p[2] > 0.70:
+                        return handle
+                except Exception:
+                    continue
+
+        # 2. Check initial scene blocks (Phase 4 backward compatibility)
         for color, handle in self.blocks.items():
             try:
                 p = self.sim.getObjectPosition(handle, -1)
-                # Block must be within 0.08m of pick station and at conveyor elevation
                 if abs(p[0] - pick_station_x) < 0.08 and abs(p[1]) < 0.08 and p[2] > 0.70:
                     return handle
             except Exception:
                 continue
+
         return None
 
-    def feed_next_block(self, max_steps: int = 120) -> Tuple[bool, DetectionResult]:
+    def feed_next_block(self, max_steps: int = 180) -> Tuple[bool, DetectionResult]:
         """
         Advances the input conveyor until a block arrives at the bumper pickup station
         (image center X >= 70) and is classified by the camera with high confidence.
+        Stops the conveyor as soon as the pick station is occupied to prevent overrun.
         
         Returns:
             (success, detection_result)
@@ -167,7 +203,7 @@ class SortingController:
             res = self.detector.detect_color()
             # Block reaches pickup station when centroid X >= 70 (at bumper X=-0.375)
             if res.detected and res.color in self.SUPPORTED_COLORS and res.center[0] >= 70 and res.confidence >= 0.75:
-                # Stop conveyor immediately so block settles at bumper
+                # Stop conveyor immediately so block settles at bumper and pick station is locked
                 self.set_input_conveyor_speed(0.0)
                 for _ in range(5):
                     self.client.step()
@@ -198,7 +234,7 @@ class SortingController:
         4. Picks block using UR5 arm and RG2 gripper.
         5. Places block on corresponding output conveyor.
         6. Operates output conveyor until block rolls into matching collection bin.
-        7. Verifies final containment and updates counters.
+        7. Verifies final containment and updates counters & lifecycle states.
         
         Returns:
             Dict containing cycle metrics and success status.
@@ -244,9 +280,15 @@ class SortingController:
             self.stats["grasp_failures"] += 1
             return {"success": False, "reason": "Object handle resolution failed"}
 
-        # Ground truth check for auditing (does not influence sorting decision)
-        ground_truth_alias = self.sim.getObjectAlias(block_h)
-        print(f" [AUDIT] Ground Truth Scene Alias: '{ground_truth_alias}' -> Vision: '{detected_color}'")
+        # Resolve tracked object metadata if spawned dynamically
+        tracked_obj = self.spawner.get_object(block_h) if self.spawner else None
+        obj_name = tracked_obj.id if tracked_obj else self.sim.getObjectAlias(block_h)
+        print(f" [AUDIT] Object ID: '{obj_name}' -> Vision Decision: '{detected_color}'")
+
+        if tracked_obj:
+            tracked_obj.transition_to(ObjectState.DETECTED)
+            tracked_obj.target_conveyor = f"OutputConveyor{detected_color.capitalize()}"
+            tracked_obj.target_bin = f"{detected_color.capitalize()}CollectionBin"
 
         # 3. Pick Sequence
         print(f" [*] Picking '{detected_color}' block from input station...")
@@ -256,14 +298,21 @@ class SortingController:
         if not pick_ok or p_lifted[2] <= (cfg.CONVEYOR_SURFACE_Z + 0.05):
             print(f" [FAIL] Failed to grasp or lift block! (lift_z={p_lifted[2]:.3f}m)")
             self.stats["grasp_failures"] += 1
+            if tracked_obj:
+                tracked_obj.transition_to(ObjectState.FAILED)
             return {"success": False, "reason": "Grasp or lift failure"}
+            
         print(f" [+] Block lifted safely to corridor height: Z={p_lifted[2]:.3f}m")
+        if tracked_obj:
+            tracked_obj.transition_to(ObjectState.PICKED)
 
         # 4. Place Sequence to Matching Output Conveyor
         print(f" [*] Transporting and depositing onto 'OutputConveyor{detected_color.capitalize()}'...")
         place_ok = self.robot.place_block(detected_color, block_h, steps=14)
         p_placed = self.sim.getObjectPosition(block_h, -1)
         print(f" [+] Deposited position: {[round(x, 3) for x in p_placed]}")
+        if tracked_obj:
+            tracked_obj.transition_to(ObjectState.PLACED)
 
         # 5. Conveyor Transport to Collection Bin
         out_conv = self.out_convs[detected_color]
@@ -276,24 +325,31 @@ class SortingController:
         # 6. Verify Bin Containment
         contained, p_final = self.check_bin_containment(detected_color, block_h)
         print(f" [+] Final position: {[round(x, 3) for x in p_final]}")
+        if tracked_obj:
+            tracked_obj.final_pos = [round(x, 3) for x in p_final]
 
         bin_name = f"{detected_color.capitalize()}CollectionBin"
         if contained:
             print(f" [PASS] Block successfully secured inside {bin_name}!")
             self.stats[detected_color] += 1
             self.stats["total_sorted"] += 1
+            if tracked_obj:
+                tracked_obj.transition_to(ObjectState.SORTED)
             success = True
         else:
             print(f" [FAIL] Block did not land securely inside {bin_name}.")
             self.stats["bin_failures"] += 1
+            if tracked_obj:
+                tracked_obj.transition_to(ObjectState.FAILED)
             success = False
 
         duration = time.time() - cycle_start_time
         cycle_result = {
             "success": success,
+            "object_id": obj_name,
             "color": detected_color,
             "confidence": confidence,
-            "ground_truth": ground_truth_alias,
+            "ground_truth": obj_name,
             "final_position": [round(x, 3) for x in p_final],
             "contained": contained,
             "duration_s": round(duration, 2),
@@ -303,7 +359,7 @@ class SortingController:
 
     def run_multi_block_sorting(self, target_count: int = 3) -> bool:
         """
-        Executes sequential sorting for multiple blocks arriving on the input conveyor.
+        Executes sequential sorting for multiple blocks arriving on the input conveyor (Phase 4).
         """
         print("\n" + "=" * 70)
         print(f" EXECUTING MULTI-BLOCK SORTING RUN (Target: {target_count} blocks)")
@@ -325,3 +381,144 @@ class SortingController:
         print(f" Blue Blocks : {self.stats['blue']}")
         print("=" * 70)
         return True
+
+    def run_continuous_sorting(
+        self,
+        max_objects: int = 6,
+        max_duration_s: Optional[float] = None,
+        color_sequence: Optional[List[str]] = None,
+        color_distribution: Optional[Dict[str, float]] = None,
+        save_annotations: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Continuous Factory Automation Pipeline (Phase 5):
+        - Dynamically spawns blocks sequentially on the input conveyor.
+        - Feeds objects one at a time toward the end bumper without pileups or collisions.
+        - Controls conveyor flow (halts when pick station is occupied, resumes when clear).
+        - Inspects each block via camera pixels using OpenCV HSV classification.
+        - Transits and deposits blocks into matching color collection bins.
+        - Tracks complete lifecycle states: SPAWNED -> WAITING -> DETECTED -> PICKED -> PLACED -> SORTED.
+        
+        Args:
+            max_objects: Maximum total objects to spawn and sort.
+            max_duration_s: Optional max run time limit in seconds.
+            color_sequence: Optional list of colors to spawn sequentially.
+            color_distribution: Optional color distribution weights.
+            save_annotations: Whether to save annotated vision frames to test_output.
+            
+        Returns:
+            Dict containing comprehensive session statistics and per-object audit trails.
+        """
+        print("\n" + "=" * 75)
+        print(f" STARTING CONTINUOUS FACTORY SORTING AUTOMATION (Target: {max_objects} objects)")
+        print("=" * 75)
+
+        start_time = time.time()
+
+        # 1. Ensure spawner is initialized
+        if self.spawner is None:
+            self.setup_spawner(
+                color_sequence=color_sequence,
+                color_distribution=color_distribution,
+            )
+        else:
+            if color_sequence:
+                self.spawner.color_sequence = color_sequence
+            if color_distribution:
+                self.spawner.color_distribution = color_distribution
+
+        # 2. Clear initial static blocks to ensure pure dynamic operation
+        self.spawner.clear_scene_initial_blocks()
+
+        # Reset statistics
+        self.stats = {
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "total_sorted": 0,
+            "detection_failures": 0,
+            "grasp_failures": 0,
+            "bin_failures": 0,
+        }
+        self.history.clear()
+
+        spawned_count = 0
+
+        # Continuous loop
+        while spawned_count < max_objects:
+            if max_duration_s and (time.time() - start_time) > max_duration_s:
+                print(f"[!] Max run duration of {max_duration_s}s reached. Stopping automation.")
+                break
+
+            current_cycle = spawned_count + 1
+            print(f"\n========================================================")
+            print(f" CONTINUOUS PIPELINE: OBJECT {current_cycle} OF {max_objects}")
+            print(f"========================================================")
+
+            # Spawn next dynamic object at inlet
+            obj = self.spawner.spawn_object()
+            if obj is None:
+                print("[!] Spawn inlet blocked. Waiting 10 steps...")
+                for _ in range(10):
+                    self.client.step()
+                continue
+
+            spawned_count += 1
+
+            # Execute sort cycle for the spawned object
+            ann_path = (
+                f"test_output/continuous_obj_{current_cycle}_{obj.color}.png"
+                if save_annotations
+                else None
+            )
+            cycle_result = self.sort_cycle(auto_feed=True, save_annotation_path=ann_path)
+
+            if not cycle_result["success"]:
+                print(f"[!] Continuous sorting failed for object {obj.id}: {cycle_result.get('reason')}")
+                break
+
+            # Let the conveyor clear before introducing next block
+            for _ in range(5):
+                self.client.step()
+
+        total_duration = time.time() - start_time
+        waiting_count = len(self.spawner.get_objects_in_state(ObjectState.WAITING))
+
+        all_sorted = (self.stats["total_sorted"] == spawned_count and spawned_count == max_objects)
+
+        summary = {
+            "success": all_sorted,
+            "total_spawned": spawned_count,
+            "total_sorted": self.stats["total_sorted"],
+            "total_failed": self.stats["detection_failures"] + self.stats["grasp_failures"] + self.stats["bin_failures"],
+            "sorted_by_color": {
+                "red": self.stats["red"],
+                "green": self.stats["green"],
+                "blue": self.stats["blue"],
+            },
+            "currently_waiting": waiting_count,
+            "duration_s": round(total_duration, 2),
+            "objects": [
+                {
+                    "id": o.id,
+                    "color": o.color,
+                    "state": o.state.value,
+                    "final_pos": o.final_pos,
+                    "history": [(s.value, round(t - start_time, 2)) for s, t in o.state_history],
+                }
+                for o in self.spawner.objects.values()
+            ],
+        }
+
+        print("\n" + "=" * 75)
+        print(" CONTINUOUS SORTING RUN SUMMARY REPORT")
+        print("=" * 75)
+        print(f" Total Spawned      : {summary['total_spawned']}")
+        print(f" Successfully Sorted: {summary['total_sorted']} / {summary['total_spawned']}")
+        print(f" Total Failed       : {summary['total_failed']}")
+        print(f" Currently Waiting  : {summary['currently_waiting']}")
+        print(f" Sorted by Color    : Red={self.stats['red']}, Green={self.stats['green']}, Blue={self.stats['blue']}")
+        print(f" Total Duration     : {summary['duration_s']} s")
+        print("=" * 75)
+
+        return summary
