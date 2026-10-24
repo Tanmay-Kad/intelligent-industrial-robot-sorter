@@ -153,6 +153,9 @@ coppeliaSim_crash_*.dmp
 coppeliaSim_recording_*.mp4
 coppeliaSim_recording_*.avi
 
+# Test outputs & captured camera frames
+test_output/
+
 # ------------------------------------------------------------------------------
 # Critical Whitelist & Tracked Assets Guarantee
 # ------------------------------------------------------------------------------
@@ -163,6 +166,9 @@ coppeliaSim_recording_*.avi
 !core/
 !robot/
 !scene/
+!vision/
+!src/
+!tests/
 !*.py
 !requirements.txt
 !README.md

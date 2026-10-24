@@ -327,6 +327,13 @@ def build_scene():
     sim.setObjectAlias(cam_handle, cam_cfg["name"])
     sim.setObjectPosition(cam_handle, cam_cfg["position"], -1)
     sim.setObjectOrientation(cam_handle, cam_cfg["orientation"], -1)
+
+    # Remove built-in script on camera model so Python receives raw RGB frames
+    for child in sim.getObjectsInTree(cam_handle):
+        if sim.getObjectType(child) == sim.object_script_type:
+            sim.removeObject(child)
+            print(" [+] Removed InspectionCamera built-in script (Python has full raw RGB access)")
+
     created_components[cam_cfg["name"]] = cam_handle
     print(f" [+] Overhead Inspection Camera aligned at {cam_cfg['position']} pointing down")
 
