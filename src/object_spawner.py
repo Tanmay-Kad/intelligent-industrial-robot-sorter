@@ -85,6 +85,7 @@ class ObjectSpawner:
         color_sequence: Optional[List[str]] = None,
         color_distribution: Optional[Dict[str, float]] = None,
         min_spacing: float = 0.22,
+        max_spawn_count: Optional[int] = None,
     ):
         """
         Initializes the dynamic spawner.
@@ -98,6 +99,7 @@ class ObjectSpawner:
             color_sequence: Optional explicit list of colors to spawn sequentially.
             color_distribution: Optional probability weights for random color selection.
             min_spacing: Minimum distance in meters required before spawning next block.
+            max_spawn_count: Optional ceiling on total spawned objects.
         """
         self.client = client
         self.sim = sim
@@ -107,6 +109,7 @@ class ObjectSpawner:
         self.color_sequence = color_sequence
         self.color_distribution = color_distribution or {"red": 1/3, "green": 1/3, "blue": 1/3}
         self.min_spacing = min_spacing
+        self.max_spawn_count = max_spawn_count
 
         # Internal tracking
         self.spawn_counter = 0
@@ -164,8 +167,12 @@ class ObjectSpawner:
             color_override: If specified, forces this color ('red', 'green', 'blue').
             
         Returns:
-            SpawnedObject instance if successful, or None if spawn zone is obstructed.
+            SpawnedObject instance if successful, or None if spawn zone is obstructed or max reached.
         """
+        if self.max_spawn_count is not None and self.spawn_counter >= self.max_spawn_count:
+            print(f" [SPAWNER] Max spawn count ({self.max_spawn_count}) reached. No further blocks will be spawned.")
+            return None
+
         if not self.is_spawn_zone_clear():
             print(f" [SPAWNER] Spawn zone at {self.spawn_pos[0]:.2f}m is not clear. Waiting...")
             return None

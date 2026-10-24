@@ -163,7 +163,13 @@ class UR5Controller:
         """
         Detaches object from RG2 connector, returning it to free dynamic world space.
         """
-        self.sim.setObjectParent(object_handle, -1, True)
+        try:
+            self.sim.setObjectParent(object_handle, -1, True)
+        except Exception:
+            try:
+                self.sim.setObjectParent(object_handle, self.sim.handle_world, True)
+            except Exception:
+                pass
 
     def pick_block(self, block_handle: int = None, steps: int = 10) -> bool:
         """

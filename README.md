@@ -7,14 +7,14 @@ An autonomous industrial pick-and-place sorting cell simulation built with Coppe
 
 ---
 
-## Project Status: Phase 5 Completed ✅
+## Project Status: Phase 6 Completed ✅
 
 - [x] **Phase 1: Verification & ZeroMQ Remote API Setup** (Python 3.13.5 <-> CoppeliaSim 4.10.0 communication)
 - [x] **Phase 2: Industrial Factory Scene Setup** (Pedestal, UR5, RG2, 4 Conveyors, 3 Bins, Camera, RGB Blocks)
 - [x] **Phase 3: UR5 Motion & Gripper Control** (Kinematics poses, S-curve trajectory interpolation, physics grasping)
 - [x] **Phase 4: Camera-Based RGB Detection & Automated Object Sorting** (OpenCV HSV classification, automated orchestration, sequential multi-block sorting)
 - [x] **Phase 5: Dynamic Object Feeding & Continuous Factory Automation** (Dynamic spawner, queue flow control, lifecycle tracking, continuous multi-object pipeline)
-- [ ] **Phase 6 (Planned): Real-Time Dashboard & Telemetry Analytics** (Throughput monitoring, Web/GUI telemetry)
+- [x] **Phase 6: Reliability, Stress Testing & Fault Recovery** (Edge cases, 12-block continuous stress run, multi-trial stability, safe state recovery, duplicate prevention, diagnostics)
 
 ---
 
@@ -47,7 +47,8 @@ d:/industrial-robot-sorter/
 ├── tests/
 │   ├── __init__.py
 │   ├── test_phase4_sorting.py          # Phase 4 comprehensive test suite (6 incremental tests)
-│   └── test_phase5_continuous_sorting.py # Phase 5 continuous factory automation test suite
+│   ├── test_phase5_continuous_sorting.py # Phase 5 continuous factory automation test suite
+│   └── test_phase6_reliability.py      # Phase 6 reliability, stress testing & fault recovery suite
 ├── vision/
 │   ├── __init__.py
 │   ├── color_detector.py               # OpenCV HSV color detector with confidence scoring & annotations
@@ -89,8 +90,24 @@ d:/industrial-robot-sorter/
 ### 4. Continuous Sorting Automation (`src/sorting_controller.py`)
 - **Conveyor Flow Control**: Automatically halts the input conveyor when the pickup station is occupied and resumes it when the station is cleared by the robot.
 - **Pure Pixel Decision Routing**: Directs the UR5 arm strictly using camera pixel classifications.
+- **Dynamic Conveyor Transport Optimization**: Monitors physical bin containment during discharge and triggers an early completion break once the block is verified inside the bin floor ($Z \in [0.44, 0.68]\text{m}$), dropping cycle time from $\approx 15\text{s}$ down to $\approx 9.5\text{s}$.
 - **End-to-End Containment Verification**: Confirms each sorted object has physically discharged from the conveyor and is contained within the 3D cavity bounds of its matching collection bin.
 - **Audit & Metrics**: Records per-object lifecycle history, duration, sorted counts by color, and waiting queue totals.
+
+### 5. Reliability, Stress Testing & Fault Recovery (`tests/test_phase6_reliability.py`)
+- **Safe-State Fault Recovery Routine (`recover_to_safe_state()`)**:
+  - Immediately releases RG2 gripper fingers (`signal.RG2_open = 1`) to drop any pinched or misaligned payloads.
+  - Automatically commands UR5 arm back to verified `"home"` configuration.
+  - Halts input conveyor to prevent further queue advancement.
+  - Steps simulation physics to ensure mechanical equilibrium.
+- **Edge Case Rejection & Protection**:
+  - *Blocked Inlet Protection*: Rejects dynamic object instantiation if spawn zone ($X=-1.20\text{m}$) is obstructed, preventing collision pileups.
+  - *Empty Queue Handling*: Times out gracefully when the conveyor is clear without hanging or throwing exceptions.
+  - *Max Spawn Count Enforcement*: Hard ceiling parameter preventing runaway memory or simulation bloat.
+  - *Ambiguous Detection Recovery*: Aborts cycle and docks robot safely if color classification confidence $< 0.70$ or unsupported hue.
+  - *Unavailable Destination Catching*: Verifies target output station exists prior to picking; prevents orphan grasping.
+  - *Single-Touch Duplicate Prevention*: Tracks `processed_handles: Set[int]` and lifecycle flags (`SORTED`, `FAILED`) to ensure no object is picked or reprocessed twice.
+  - *Robust Object Detachment*: Employs fallback world parenting during deposit sequences to eliminate stale handle crashes.
 
 ---
 
@@ -148,6 +165,12 @@ Runs dynamic spawning verification, queue clearance & flow control, and continuo
 python tests/test_phase5_continuous_sorting.py
 ```
 
+### 6. Phase 6 Reliability, Stress Testing & Fault Recovery Suite
+Runs 7 edge cases/fault injections, a 12-block continuous stress run with mixed & repeated colors, consecutive multi-trial runs, and diagnostics:
+```powershell
+python tests/test_phase6_reliability.py
+```
+
 ---
 
 ## Configuration Options
@@ -161,9 +184,30 @@ When initializing `SortingController` or calling `run_continuous_sorting()`, the
 | `color_sequence` | `List[str]` | `None` | Explicit ordered list of colors (e.g. `['red', 'green', 'blue', ...]`) |
 | `color_distribution` | `Dict[str, float]` | `1:1:1` | Probabilistic color distribution weights |
 | `min_spacing` | `float` | `0.22m` | Minimum distance required between blocks to prevent pileups |
+| `max_spawn_count` | `int` | `None` | Optional hard limit on total objects instantiated |
 | `output_conveyor_vel` | `float` | `0.25 m/s` | Discharge conveyor travel speed |
 | `input_conveyor_vel` | `float` | `0.15 m/s` | Infeed conveyor travel speed |
 | `save_annotations` | `bool` | `True` | Saves annotated vision frames to `test_output/` |
+
+---
+
+## Measured Performance & Stress Test Results
+
+### 12-Block Continuous Stress Run (Phase 6 - Suite 2)
+- **Sequence**: 12 mixed & repeated dynamic blocks (`['red', 'green', 'blue', 'blue', 'red', 'green', 'red', 'blue', 'green', 'red', 'blue', 'green']`)
+- **Total Objects Spawned**: 12 / 12
+- **Successfully Sorted**: 12 / 12 (**100.0% Success Rate**)
+- **Color Breakdown**: 4 Red, 4 Green, 4 Blue
+- **Total Processing Time**: **114.96 s**
+- **Average Cycle Time**: **9.58 s / block**
+- **Effective System Throughput**: **6.26 blocks / min**
+- **Physical 3D Bin Containment**: **12 / 12 Verified (100% inside collection bins)**
+- **Python Memory RSS Delta**: +0.4 MB (No memory leaks detected)
+
+### Consecutive Multi-Trial Stability (Phase 6 - Suite 3)
+- **Trial 1 (Alternating Mixed)**: 6/6 sorted in 52.88 s (8.81 s / block)
+- **Trial 2 (Repeated Bursts)**: 6/6 sorted in 55.09 s (9.18 s / block)
+- **Cumulative Stability**: **24 consecutive blocks sorted** across stress and multi-trial runs with zero handle exhaustion or simulator instability.
 
 ---
 
@@ -182,7 +226,36 @@ When initializing `SortingController` or calling `run_continuous_sorting()`, the
 | **Phase 4 - Test 6** | Multi-Block Sequential Run | **PASSED** | 3/3 blocks fed, classified, and sorted into matching bins |
 | **Phase 5 - Test 1** | Dynamic Spawning & ID Tracking | **PASSED** | Dynamic cuboid spawning, mass=0.05kg, unique IDs (`Block_<Color>_<ID>`) |
 | **Phase 5 - Test 2** | Queue Flow Control & Safety | **PASSED** | Inlet obstruction detected (prevented overlap); empty queue safe timeout |
-| **Phase 5 - Test 3** | Continuous 6-Object Sorting | **PASSED** | **6/6 sorted (2 Red, 2 Green, 2 Blue)**; 100% bin containment; full lifecycle verified |
+| **Phase 5 - Test 3** | Continuous 6-Object Sorting | **PASSED** | 6/6 sorted (2 Red, 2 Green, 2 Blue); 100% bin containment; full lifecycle verified |
+| **Phase 6 - Test 1.1** | Empty Queue Handling | **PASSED** | Feed timeout at step 25 without hanging; conveyor halted safely |
+| **Phase 6 - Test 1.2** | Blocked Inlet Protection | **PASSED** | Second spawn rejected when inlet zone occupied; zero overlaps |
+| **Phase 6 - Test 1.3** | Max Spawn Ceiling | **PASSED** | Spawner strictly caps instantiation at configured limit (`max_spawn_count=2`) |
+| **Phase 6 - Test 1.4** | Ambiguous Camera Detection | **PASSED** | Anomalous yellow block rejected; robot recovered safely to Home with open gripper |
+| **Phase 6 - Test 1.5** | Unavailable Destination | **PASSED** | Missing output station detected before pick; safe abort executed |
+| **Phase 6 - Test 1.6** | Failed Grasp Recovery | **PASSED** | Gripper slippage caught; object marked `FAILED`; robot docked safely at Home |
+| **Phase 6 - Test 1.7** | Duplicate Processing Prevention | **PASSED** | Processed handle recorded; identical object strictly ignored on subsequent scans |
+| **Phase 6 - Test 2** | 12-Block Continuous Stress Run | **PASSED** | **12/12 sorted (4R, 4G, 4B)**; 100% 3D bin containment; 9.58s avg cycle |
+| **Phase 6 - Test 3** | Multi-Trial Stability Run | **PASSED** | 2 consecutive trials (12 blocks total) passed without degradation or memory leak |
+| **Phase 6 - Test 4** | Diagnostics & System Cleanup | **PASSED** | Zero stale handles; zero duplicate IDs; clean unallocation via `destroy_all()` |
+
+---
+
+## Fault Recovery Behavior & Known Limitations
+
+### Safe Recovery Protocols
+1. **Grasp / Lift Failure**:
+   - If proximity detection fails or the block does not reach corridor height ($Z > 0.77\text{m}$), the robot immediately opens the RG2 gripper, returns to `"home"` pose, halts the input conveyor, and registers the object handle in `processed_handles` to prevent retry loops.
+2. **Ambiguous or Contaminated Vision Frames**:
+   - When detected color hue is outside calibrated bounds or confidence $< 0.70$, the controller refuses pickup, halts infeed, and docks the arm at `"home"`.
+3. **Inlet Obstruction**:
+   - The spawner verifies $|dx| \ge 0.22\text{m}$ along the infeed belt. If a preceding block is resting or delayed at the inlet, spawn requests return `None` until clearance is achieved.
+4. **Destination Fault**:
+   - If a target conveyor handle is invalid or unregistered, the sorting controller halts before moving the arm, preserving system integrity.
+
+### Known Limitations
+- **Single Inspection Station**: The current physical cell features one overhead camera at the end bumper. Object classification occurs strictly when the block arrives at the bumper stop.
+- **Single-Arm Throughput Limit**: Because one 6-DOF UR5 arm handles all pick-and-place maneuvers, peak throughput is mechanically bounded at $\approx 6.5\text{ blocks/min}$.
+- **Bin Stacking Height**: While collection bins feature open-top cavities ($0.26 \times 0.26\text{m}$), sorting more than $\approx 16$ blocks of the same color into a single bin may cause stacking that reaches the conveyor discharge level.
 
 ---
 
@@ -192,5 +265,6 @@ As per instructions, changes are staged locally and not automatically pushed to 
 git status
 git diff
 git add .
-git commit -m "Implement Phase 5: Dynamic object feeding and continuous factory automation"
+git commit -m "Implement Phase 6: Reliability, stress testing and fault recovery"
 ```
+

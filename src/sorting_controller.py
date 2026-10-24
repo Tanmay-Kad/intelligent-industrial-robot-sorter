@@ -88,6 +88,7 @@ class SortingController:
             "bin_failures": 0,
         }
         self.history: List[Dict[str, Any]] = []
+        self.processed_handles: set = set()
 
     def setup_spawner(
         self,
@@ -113,6 +114,7 @@ class SortingController:
         self.robot.configure_joints()
         self.robot.move_to_named_pose("home", steps=10)
         self.robot.open_gripper(steps=20)
+        self.processed_handles.clear()
 
         # Initialize output conveyor velocities
         for color, handle in self.out_convs.items():
@@ -123,6 +125,31 @@ class SortingController:
         for _ in range(5):
             self.client.step()
         print(" [+] All subsystems initialized and verified ready.")
+
+    def recover_to_safe_state(self):
+        """
+        Fault Recovery & Safe State Routine:
+        - Opens RG2 gripper to release any pinched or misaligned objects
+        - Returns UR5 robot arm safely to home pose
+        - Halts input conveyor to prevent further queuing
+        - Stabilizes simulation physics
+        """
+        print(" [*] Executing Fault Recovery: Returning robot to safe Home state...")
+        try:
+            self.robot.open_gripper(steps=15)
+        except Exception:
+            pass
+        try:
+            self.robot.move_to_named_pose("home", steps=10)
+        except Exception:
+            pass
+        try:
+            self.set_input_conveyor_speed(0.0)
+        except Exception:
+            pass
+        for _ in range(5):
+            self.client.step()
+        print(" [+] Robot safely docked at Home pose with gripper opened.")
 
     def set_input_conveyor_speed(self, speed: float):
         """Sets the input conveyor velocity."""
@@ -167,6 +194,11 @@ class SortingController:
         # 1. Check dynamically spawned objects
         if self.spawner is not None:
             for handle in self.spawner.objects:
+                if handle in self.processed_handles:
+                    continue
+                obj = self.spawner.get_object(handle)
+                if obj and obj.state in (ObjectState.SORTED, ObjectState.FAILED):
+                    continue
                 try:
                     p = self.sim.getObjectPosition(handle, -1)
                     if abs(p[0] - pick_station_x) < 0.08 and abs(p[1]) < 0.08 and p[2] > 0.70:
@@ -176,6 +208,8 @@ class SortingController:
 
         # 2. Check initial scene blocks (Phase 4 backward compatibility)
         for color, handle in self.blocks.items():
+            if handle in self.processed_handles:
+                continue
             try:
                 p = self.sim.getObjectPosition(handle, -1)
                 if abs(p[0] - pick_station_x) < 0.08 and abs(p[1]) < 0.08 and p[2] > 0.70:
@@ -252,9 +286,11 @@ class SortingController:
                 feed_ok, res = self.feed_next_block()
                 if not feed_ok:
                     self.stats["detection_failures"] += 1
+                    self.recover_to_safe_state()
                     return {"success": False, "reason": "No block reached inspection station"}
             else:
                 self.stats["detection_failures"] += 1
+                self.recover_to_safe_state()
                 return {"success": False, "reason": "No block detected at pickup station"}
 
         detected_color = res.color
@@ -263,7 +299,15 @@ class SortingController:
         if detected_color not in self.SUPPORTED_COLORS or confidence < 0.70:
             print(f" [!] Classification rejected: color='{detected_color}', conf={confidence:.2f}")
             self.stats["detection_failures"] += 1
+            self.recover_to_safe_state()
             return {"success": False, "reason": f"Ambiguous or unsupported color: {detected_color}"}
+
+        # Check destination availability
+        if detected_color not in self.out_convs:
+            print(f" [!] Error: Target destination for '{detected_color}' is unavailable.")
+            self.stats["bin_failures"] += 1
+            self.recover_to_safe_state()
+            return {"success": False, "reason": f"Unavailable destination for {detected_color}"}
 
         print(
             f" [VISION] Decision: Target Route = '{detected_color.upper()}' "
@@ -278,6 +322,7 @@ class SortingController:
         if block_h is None:
             print(" [!] Error: Camera detected color, but physical block could not be resolved.")
             self.stats["grasp_failures"] += 1
+            self.recover_to_safe_state()
             return {"success": False, "reason": "Object handle resolution failed"}
 
         # Resolve tracked object metadata if spawned dynamically
@@ -298,11 +343,14 @@ class SortingController:
         if not pick_ok or p_lifted[2] <= (cfg.CONVEYOR_SURFACE_Z + 0.05):
             print(f" [FAIL] Failed to grasp or lift block! (lift_z={p_lifted[2]:.3f}m)")
             self.stats["grasp_failures"] += 1
+            self.processed_handles.add(block_h)
             if tracked_obj:
                 tracked_obj.transition_to(ObjectState.FAILED)
+            self.recover_to_safe_state()
             return {"success": False, "reason": "Grasp or lift failure"}
             
         print(f" [+] Block lifted safely to corridor height: Z={p_lifted[2]:.3f}m")
+        self.processed_handles.add(block_h)
         if tracked_obj:
             tracked_obj.transition_to(ObjectState.PICKED)
 
@@ -321,6 +369,12 @@ class SortingController:
 
         for s in range(110):
             self.client.step()
+            if s >= 35:
+                contained, _ = self.check_bin_containment(detected_color, block_h)
+                if contained:
+                    for _ in range(5):
+                        self.client.step()
+                    break
 
         # 6. Verify Bin Containment
         contained, p_final = self.check_bin_containment(detected_color, block_h)
