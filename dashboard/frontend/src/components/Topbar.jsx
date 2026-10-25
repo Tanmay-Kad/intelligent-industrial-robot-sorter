@@ -36,6 +36,13 @@ export default function Topbar({
             <span>SYSTEM PAUSED</span>
           </div>
         );
+      case 'STOPPING':
+        return (
+          <div className="flex items-center space-x-2 px-3 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-amber-300 text-xs font-semibold">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+            <span>STOPPING SAFELY...</span>
+          </div>
+        );
       case 'STOPPED':
         return (
           <div className="flex items-center space-x-2 px-3 py-1 bg-slate-700/30 border border-slate-700 rounded-full text-slate-400 text-xs font-semibold">
@@ -65,6 +72,8 @@ export default function Topbar({
     const s = Math.floor(sec % 60);
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
+
+  const isBusy = stats.factory_state === 'RUNNING' || stats.factory_state === 'STOPPING' || stats.factory_state === 'RESETTING';
 
   return (
     <header className="h-16 bg-industrial-900 border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
@@ -98,9 +107,9 @@ export default function Topbar({
           ) : (
             <button
               onClick={onStart}
-              disabled={stats.factory_state === 'RUNNING' || loadingAction !== null}
+              disabled={isBusy || loadingAction !== null}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded text-xs font-medium transition shadow-sm ${
-                stats.factory_state === 'RUNNING'
+                isBusy
                   ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                   : 'bg-sky-600 hover:bg-sky-500 text-white'
               }`}
@@ -127,7 +136,7 @@ export default function Topbar({
 
           <button
             onClick={onStop}
-            disabled={stats.factory_state === 'STOPPED' || stats.factory_state === 'IDLE' || loadingAction !== null}
+            disabled={stats.factory_state === 'STOPPED' || stats.factory_state === 'IDLE' || stats.factory_state === 'STOPPING' || loadingAction !== null}
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded text-xs font-medium transition ${
               stats.factory_state === 'RUNNING' || stats.factory_state === 'PAUSED'
                 ? 'bg-slate-800 hover:bg-red-600 text-red-300 hover:text-white'
@@ -141,8 +150,8 @@ export default function Topbar({
 
           <button
             onClick={onReset}
-            disabled={loadingAction !== null}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-xs font-medium transition"
+            disabled={stats.factory_state === 'STOPPING' || loadingAction !== null}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-xs font-medium transition disabled:opacity-50"
             title="Reset scene to clean baseline"
           >
             <RotateCcw className="w-3.5 h-3.5" />

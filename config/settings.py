@@ -6,11 +6,13 @@ import os
 import math
 
 # ZMQ Remote API Connection
-ZMQ_HOST = "localhost"
-ZMQ_PORT = 23000
+ZMQ_HOST = os.environ.get("ZMQ_HOST", "localhost")
+ZMQ_PORT = int(os.environ.get("ZMQ_PORT", "23000"))
 
 # CoppeliaSim Installation and Model Paths
-COPPELIASIM_APP_PATH = "C:/Program Files/CoppeliaRobotics/CoppeliaSimEdu"
+COPPELIASIM_APP_PATH = os.environ.get(
+    "COPPELIASIM_APP_PATH", "C:/Program Files/CoppeliaRobotics/CoppeliaSimEdu"
+)
 MODELS_DIR = os.path.join(COPPELIASIM_APP_PATH, "models")
 
 MODEL_PATHS = {

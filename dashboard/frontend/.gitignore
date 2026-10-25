@@ -8,7 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# Allow production dist bundle for direct FastAPI static serving
+!dist/
+!dist/**
 dist-ssr
 *.local
 

@@ -11,6 +11,7 @@ class FactoryState(str, Enum):
     IDLE = "IDLE"
     RUNNING = "RUNNING"
     PAUSED = "PAUSED"
+    STOPPING = "STOPPING"
     STOPPED = "STOPPED"
     RESETTING = "RESETTING"
     ERROR = "ERROR"

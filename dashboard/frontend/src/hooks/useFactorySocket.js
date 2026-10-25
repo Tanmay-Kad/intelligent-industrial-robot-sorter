@@ -1,7 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const API_BASE = `http://${window.location.hostname}:8000`;
-const WS_URL = `ws://${window.location.hostname}:8000/ws/telemetry`;
+const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+const wsProto = isHttps ? 'wss:' : 'ws:';
+const httpProto = isHttps ? 'https:' : 'http:';
+
+// When running under Vite dev server (port 5173 / 3000), target FastAPI on port 8000.
+// When served directly from FastAPI (port 8000 or custom port), use window.location.host.
+const isDevServer = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
+const host = typeof window !== 'undefined'
+  ? (isDevServer ? `${window.location.hostname}:8000` : window.location.host)
+  : 'localhost:8000';
+
+const API_BASE = `${httpProto}//${host}`;
+const WS_URL = `${wsProto}//${host}/ws/telemetry`;
 
 export function useFactorySocket() {
   const [connected, setConnected] = useState(false);

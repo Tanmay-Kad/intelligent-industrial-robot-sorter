@@ -25,6 +25,12 @@ def validate_scene():
     print("=" * 70)
 
     client, sim = get_sim_client(cfg.ZMQ_HOST, cfg.ZMQ_PORT)
+    client.setStepping(False)
+    if sim.getSimulationState() != sim.simulation_stopped:
+        sim.stopSimulation()
+        while sim.getSimulationState() != sim.simulation_stopped:
+            time.sleep(0.05)
+
     all_passed = True
 
     # Check 1: Object handles verification

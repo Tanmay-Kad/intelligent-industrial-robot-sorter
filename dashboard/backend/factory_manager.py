@@ -158,9 +158,9 @@ class FactoryManager:
         if not self.detector or not self.sim:
             return self.latest_vision
 
-        # When running or resetting, the worker thread exclusively owns the ZeroMQ connection.
+        # When running, stopping, or resetting, the worker thread exclusively owns the ZeroMQ connection.
         # Return cached vision telemetry to avoid concurrent socket access.
-        if self.state in (FactoryState.RUNNING, FactoryState.RESETTING):
+        if self.state in (FactoryState.RUNNING, FactoryState.STOPPING, FactoryState.RESETTING):
             return self.latest_vision
 
         try:
@@ -176,7 +176,7 @@ class FactoryManager:
         """Computes current factory overview statistics."""
         connected = False
         sim_state_str = "STOPPED"
-        if self.state == FactoryState.RUNNING:
+        if self.state in (FactoryState.RUNNING, FactoryState.STOPPING):
             sim_state_str = "RUNNING"
             connected = (self.sim is not None)
         elif self.state == FactoryState.RESETTING:
@@ -335,8 +335,8 @@ class FactoryManager:
             with self._lock:
                 if self._stop_requested:
                     self.state = FactoryState.STOPPED
-                    self.current_operation = "Automation Stopped Safely"
-                    self._add_log("info", "Automated sorting safely stopped.")
+                    self.current_operation = "Robot Docked Safely (Stopped)"
+                    self._add_log("info", "Automated sorting confirmed stopped at safe home position.")
                 else:
                     self.state = FactoryState.IDLE
                     self.current_operation = "All Targets Processed"
@@ -381,16 +381,22 @@ class FactoryManager:
         """Commands a safe stop, returning robot to Home and halting conveyors."""
         self._stop_requested = True
         self._pause_requested = False
-        self.state = FactoryState.STOPPED
-        self._add_log("warning", "Safe Stop Commanded. Halting conveyors and docking robot at Home...")
 
-        if not self._worker_thread or not self._worker_thread.is_alive():
+        if self._worker_thread and self._worker_thread.is_alive():
+            self.state = FactoryState.STOPPING
+            self.current_operation = "Safe Stop Commanded: Halting infeed & docking arm..."
+            self._add_log("warning", "Safe Stop Commanded. Halting conveyors and docking robot at Home...")
+        else:
             with self._lock:
                 if self.controller:
                     try:
                         self.controller.recover_to_safe_state()
                     except Exception:
                         pass
+            self.state = FactoryState.STOPPED
+            self.current_operation = "Robot Docked Safely (Stopped)"
+            self._add_log("info", "Robot confirmed docked at safe home position.")
+
         return {"success": True, "message": "Safe stop initiated. Robot returning to Home."}
 
     def reset_factory(self) -> Dict[str, Any]:
