@@ -89,6 +89,17 @@ class SortingController:
         }
         self.history: List[Dict[str, Any]] = []
         self.processed_handles: set = set()
+        self.current_operation: str = "System Initialized"
+        self.on_event: Optional[Any] = None
+
+    def emit_event(self, event_type: str, message: str, details: Optional[Dict[str, Any]] = None):
+        """Updates current operation state and dispatches event callback if registered."""
+        self.current_operation = message
+        if self.on_event:
+            try:
+                self.on_event(event_type, message, details or {})
+            except Exception as e:
+                print(f"[!] on_event callback exception: {e}")
 
     def setup_spawner(
         self,
@@ -135,6 +146,7 @@ class SortingController:
         - Stabilizes simulation physics
         """
         print(" [*] Executing Fault Recovery: Returning robot to safe Home state...")
+        self.emit_event("recovery", "Safe State Recovery: Returning arm to Home with open gripper")
         try:
             self.robot.open_gripper(steps=15)
         except Exception:
@@ -335,8 +347,19 @@ class SortingController:
             tracked_obj.target_conveyor = f"OutputConveyor{detected_color.capitalize()}"
             tracked_obj.target_bin = f"{detected_color.capitalize()}CollectionBin"
 
+        self.emit_event(
+            "detect",
+            f"Classified block as {detected_color.upper()} (Confidence: {confidence*100:.1f}%)",
+            {"object_id": obj_name, "color": detected_color, "confidence": round(confidence, 3)}
+        )
+
         # 3. Pick Sequence
         print(f" [*] Picking '{detected_color}' block from input station...")
+        self.emit_event(
+            "pick",
+            f"Picking {detected_color.upper()} block ({obj_name}) from bumper",
+            {"object_id": obj_name, "color": detected_color}
+        )
         pick_ok = self.robot.pick_block(block_h, steps=10)
         p_lifted = self.sim.getObjectPosition(block_h, -1)
 
@@ -356,6 +379,11 @@ class SortingController:
 
         # 4. Place Sequence to Matching Output Conveyor
         print(f" [*] Transporting and depositing onto 'OutputConveyor{detected_color.capitalize()}'...")
+        self.emit_event(
+            "place",
+            f"Transferring {obj_name} to OutputConveyor{detected_color.capitalize()}",
+            {"object_id": obj_name, "color": detected_color}
+        )
         place_ok = self.robot.place_block(detected_color, block_h, steps=14)
         p_placed = self.sim.getObjectPosition(block_h, -1)
         print(f" [+] Deposited position: {[round(x, 3) for x in p_placed]}")
@@ -366,6 +394,11 @@ class SortingController:
         out_conv = self.out_convs[detected_color]
         self.sim.writeCustomTableData(out_conv, "__ctrl__", {"vel": self.output_conveyor_vel})
         print(f" [*] Operating OutputConveyor{detected_color.capitalize()} to transport block into bin...")
+        self.emit_event(
+            "transport",
+            f"Operating conveyor to discharge {obj_name} into {detected_color.capitalize()}CollectionBin",
+            {"object_id": obj_name, "color": detected_color}
+        )
 
         for s in range(110):
             self.client.step()
@@ -390,12 +423,22 @@ class SortingController:
             if tracked_obj:
                 tracked_obj.transition_to(ObjectState.SORTED)
             success = True
+            self.emit_event(
+                "sorted",
+                f"Block {obj_name} securely collected in {bin_name}",
+                {"object_id": obj_name, "color": detected_color, "contained": True, "final_pos": [round(x, 3) for x in p_final]}
+            )
         else:
             print(f" [FAIL] Block did not land securely inside {bin_name}.")
             self.stats["bin_failures"] += 1
             if tracked_obj:
                 tracked_obj.transition_to(ObjectState.FAILED)
             success = False
+            self.emit_event(
+                "bin_failed",
+                f"Block {obj_name} missed {bin_name}",
+                {"object_id": obj_name, "color": detected_color, "contained": False, "final_pos": [round(x, 3) for x in p_final]}
+            )
 
         duration = time.time() - cycle_start_time
         cycle_result = {
@@ -443,6 +486,8 @@ class SortingController:
         color_sequence: Optional[List[str]] = None,
         color_distribution: Optional[Dict[str, float]] = None,
         save_annotations: bool = True,
+        pause_checker: Optional[Any] = None,
+        stop_checker: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Continuous Factory Automation Pipeline (Phase 5):
@@ -452,6 +497,7 @@ class SortingController:
         - Inspects each block via camera pixels using OpenCV HSV classification.
         - Transits and deposits blocks into matching color collection bins.
         - Tracks complete lifecycle states: SPAWNED -> WAITING -> DETECTED -> PICKED -> PLACED -> SORTED.
+        - Supports safe pause and safe stop checks at cycle boundaries.
         
         Args:
             max_objects: Maximum total objects to spawn and sort.
@@ -459,6 +505,8 @@ class SortingController:
             color_sequence: Optional list of colors to spawn sequentially.
             color_distribution: Optional color distribution weights.
             save_annotations: Whether to save annotated vision frames to test_output.
+            pause_checker: Optional callback returning True when pause is requested.
+            stop_checker: Optional callback returning True when stop is requested.
             
         Returns:
             Dict containing comprehensive session statistics and per-object audit trails.
@@ -500,6 +548,23 @@ class SortingController:
 
         # Continuous loop
         while spawned_count < max_objects:
+            if stop_checker and stop_checker():
+                print("[*] Stop requested before spawn. Initiating safe stop.")
+                self.recover_to_safe_state()
+                break
+
+            while pause_checker and pause_checker():
+                self.set_input_conveyor_speed(0.0)
+                self.emit_event("paused", "Factory automation paused at safe operation boundary")
+                time.sleep(0.15)
+                if stop_checker and stop_checker():
+                    break
+
+            if stop_checker and stop_checker():
+                print("[*] Stop requested during pause. Initiating safe stop.")
+                self.recover_to_safe_state()
+                break
+
             if max_duration_s and (time.time() - start_time) > max_duration_s:
                 print(f"[!] Max run duration of {max_duration_s}s reached. Stopping automation.")
                 break
@@ -518,6 +583,11 @@ class SortingController:
                 continue
 
             spawned_count += 1
+            self.emit_event(
+                "spawn",
+                f"Spawned {obj.id} ({obj.color.upper()}) on input conveyor inlet",
+                {"object_id": obj.id, "color": obj.color, "cycle": current_cycle, "target": max_objects}
+            )
 
             # Execute sort cycle for the spawned object
             ann_path = (
@@ -529,6 +599,11 @@ class SortingController:
 
             if not cycle_result["success"]:
                 print(f"[!] Continuous sorting failed for object {obj.id}: {cycle_result.get('reason')}")
+                break
+
+            if stop_checker and stop_checker():
+                print("[*] Stop requested after cycle completion. Initiating safe stop.")
+                self.recover_to_safe_state()
                 break
 
             # Let the conveyor clear before introducing next block

@@ -89,6 +89,8 @@ class ColorDetector:
         # Default ROI focused on the pickup station before the bumper
         # Excludes conveyor edges, background, and upstream trailing blocks
         self.roi_bounds = roi_bounds if roi_bounds is not None else (50, 20, 92, 110)
+        self.latest_result: Optional[DetectionResult] = None
+        self.on_detection: Optional[Any] = None
 
     def _resolve_sensor_handle(self, camera_path: str) -> int:
         """Resolves the actual vision sensor child within the camera hierarchy."""
@@ -175,7 +177,7 @@ class ColorDetector:
         if frame is None:
             ok, frame = self.capture_frame()
             if not ok or frame is None:
-                return DetectionResult(
+                return self._dispatch_result(DetectionResult(
                     detected=False,
                     color="none",
                     confidence=0.0,
@@ -185,7 +187,7 @@ class ColorDetector:
                     aspect_ratio=0.0,
                     purity=0.0,
                     annotated_frame=None,
-                )
+                ))
 
         h, w = frame.shape[:2]
 
@@ -248,7 +250,7 @@ class ColorDetector:
         if not color_candidates:
             # No color detected
             annotated = self._draw_annotation(frame, None) if annotate else None
-            return DetectionResult(
+            return self._dispatch_result(DetectionResult(
                 detected=False,
                 color="none",
                 confidence=0.0,
@@ -258,7 +260,7 @@ class ColorDetector:
                 aspect_ratio=0.0,
                 purity=0.0,
                 annotated_frame=annotated,
-            )
+            ))
 
         # Check for ambiguity: if multiple colors have high confidence (> 0.6)
         sorted_candidates = sorted(
@@ -273,7 +275,7 @@ class ColorDetector:
             if second_data["confidence"] > 0.65 and abs(best_data["confidence"] - second_data["confidence"]) < 0.15:
                 # Ambiguous detection
                 annotated = self._draw_annotation(frame, None, status_text="AMBIGUOUS") if annotate else None
-                return DetectionResult(
+                return self._dispatch_result(DetectionResult(
                     detected=True,
                     color="unknown",
                     confidence=best_data["confidence"],
@@ -283,11 +285,11 @@ class ColorDetector:
                     aspect_ratio=best_data["aspect_ratio"],
                     purity=best_data["purity"],
                     annotated_frame=annotated,
-                )
+                ))
 
         annotated = self._draw_annotation(frame, (best_color, best_data)) if annotate else None
 
-        return DetectionResult(
+        return self._dispatch_result(DetectionResult(
             detected=True,
             color=best_color,
             confidence=round(best_data["confidence"], 3),
@@ -297,7 +299,17 @@ class ColorDetector:
             aspect_ratio=round(best_data["aspect_ratio"], 3),
             purity=round(best_data["purity"], 3),
             annotated_frame=annotated,
-        )
+        ))
+
+    def _dispatch_result(self, res: DetectionResult) -> DetectionResult:
+        """Caches latest detection result and dispatches event callback if registered."""
+        self.latest_result = res
+        if self.on_detection:
+            try:
+                self.on_detection(res)
+            except Exception:
+                pass
+        return res
 
     def _draw_annotation(
         self,

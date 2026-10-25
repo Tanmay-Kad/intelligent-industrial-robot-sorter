@@ -7,7 +7,7 @@ An autonomous industrial pick-and-place sorting cell simulation built with Coppe
 
 ---
 
-## Project Status: Phase 6 Completed ✅
+## Project Status: Phase 7 Completed ✅
 
 - [x] **Phase 1: Verification & ZeroMQ Remote API Setup** (Python 3.13.5 <-> CoppeliaSim 4.10.0 communication)
 - [x] **Phase 2: Industrial Factory Scene Setup** (Pedestal, UR5, RG2, 4 Conveyors, 3 Bins, Camera, RGB Blocks)
@@ -15,6 +15,7 @@ An autonomous industrial pick-and-place sorting cell simulation built with Coppe
 - [x] **Phase 4: Camera-Based RGB Detection & Automated Object Sorting** (OpenCV HSV classification, automated orchestration, sequential multi-block sorting)
 - [x] **Phase 5: Dynamic Object Feeding & Continuous Factory Automation** (Dynamic spawner, queue flow control, lifecycle tracking, continuous multi-object pipeline)
 - [x] **Phase 6: Reliability, Stress Testing & Fault Recovery** (Edge cases, 12-block continuous stress run, multi-trial stability, safe state recovery, duplicate prevention, diagnostics)
+- [x] **Phase 7: Real-Time Monitoring Dashboard & Factory Control Interface** (React + Vite + Tailwind CSS dashboard, FastAPI backend, real-time WebSocket telemetry @ 10Hz, live /InspectionCamera JPEG stream, supervisory controls: Start, Pause, Resume, Stop, Reset, Configure)
 
 ---
 
@@ -28,6 +29,22 @@ d:/industrial-robot-sorter/
 ├── core/
 │   ├── __init__.py
 │   └── sim_client.py                   # Resilient ZMQ Remote API connection factory
+├── dashboard/
+│   ├── backend/
+│   │   ├── __init__.py
+│   │   ├── factory_manager.py          # Central thread-safe orchestrator & ZeroMQ serializer
+│   │   ├── main.py                     # FastAPI REST API & WebSocket telemetry gateway
+│   │   └── models.py                   # Pydantic schemas for telemetry, stats, and controls
+│   └── frontend/
+│       ├── dist/                       # Compiled production SPA assets (served by FastAPI)
+│       ├── src/
+│       │   ├── components/             # StatusCards, LiveCamera, SortingAnalytics, ActivityLog, Topbar, Sidebar, SettingsModal
+│       │   ├── hooks/                  # useFactorySocket.js real-time WebSocket hook
+│       │   ├── App.jsx                 # Master industrial dashboard layout
+│       │   └── index.css               # Tailored industrial dark design system
+│       ├── package.json
+│       ├── tailwind.config.js
+│       └── vite.config.js
 ├── robot/
 │   ├── __init__.py
 │   ├── kinematics.py                   # simIK solver & high-elbow collision-free waypoint repository
@@ -48,14 +65,15 @@ d:/industrial-robot-sorter/
 │   ├── __init__.py
 │   ├── test_phase4_sorting.py          # Phase 4 comprehensive test suite (6 incremental tests)
 │   ├── test_phase5_continuous_sorting.py # Phase 5 continuous factory automation test suite
-│   └── test_phase6_reliability.py      # Phase 6 reliability, stress testing & fault recovery suite
+│   ├── test_phase6_reliability.py      # Phase 6 reliability, stress testing & fault recovery suite
+│   └── test_phase7_dashboard.py        # Phase 7 REST API, WebSockets & Supervisory Controls suite
 ├── vision/
 │   ├── __init__.py
 │   ├── color_detector.py               # OpenCV HSV color detector with confidence scoring & annotations
 │   └── test_color_detector.py          # Vision sensor capture & RGB classification unit tests
 ├── .gitignore                          # Comprehensive Git ignore rules
 ├── CONTRIBUTING.md                     # Step-by-step fork, installation, and setup guide
-├── requirements.txt                    # Project dependencies (ZMQ client, NumPy, OpenCV)
+├── requirements.txt                    # Project dependencies (FastAPI, Uvicorn, WebSockets, ZMQ, NumPy, OpenCV)
 ├── test_connection.py                  # Basic connectivity verification
 └── README.md
 ```
@@ -211,6 +229,98 @@ When initializing `SortingController` or calling `run_continuous_sorting()`, the
 
 ---
 
+---
+
+## Phase 7: Real-Time Monitoring Dashboard & Factory Control Interface
+
+A modern, responsive industrial automation control-center interface built with **React**, **Vite**, **Tailwind CSS**, and **FastAPI** for live monitoring, video streaming, and supervisory factory control.
+
+### Architecture
+
+```text
+[ Browser Dashboard ] <=== WebSocket (10Hz JSON Telemetry + JPEG Base64) ===> [ FastAPI Backend ]
+  - React 18 + Vite                                                               - Async Event Loop
+  - Tailwind CSS Dark Theme                                                       - REST API Router
+  - Recharts Visualizations                                                       - Thread-Safe FactoryManager
+  - Lucide Industrial Icons                                                               │
+                                                                               (Serialized ZMQ)
+                                                                                          │
+                                                                                          ▼
+                                                                               [ CoppeliaSim Edu 4.10 ]
+                                                                                 - UR5 + RG2 Robot Arm
+                                                                                 - /InspectionCamera
+                                                                                 - 4 Conveyors & 3 Bins
+```
+
+### Key Dashboard Features
+
+1. **Factory Overview & Real-Time KPI Cards**:
+   - Live simulator connection indicator & simulation state (`RUNNING`, `PAUSED`, `STOPPED`).
+   - Dynamic object counters: Total Spawned, Successfully Sorted, Failed, and Pending queue count.
+   - Real-time operational metrics: Success rate (%), average cycle time (s), and throughput (bpm).
+
+2. **Live Inspection Camera Feed**:
+   - Streams live, actual image frames from `/InspectionCamera` at the pickup bumper.
+   - Real-time OpenCV HSV detection overlay: bounding box, centroid marker, confidence percentage meter, and destination routing badge.
+   - Zero mock data or prerecorded footage—streams directly from the running simulator.
+
+3. **Sorting Analytics & Bin Containment Matrix**:
+   - Color breakdown counters for Red, Green, and Blue objects.
+   - Interactive Recharts bar visualization showing live sorted quantities.
+   - 3D physical bin containment telemetry with X/Y/Z coordinate tracking.
+
+4. **Chronological Activity Log**:
+   - Timestamped audit trail for factory milestones: `spawn`, `detect`, `pick`, `place`, `transport`, `sorted`, `paused`, `recovery`, `error`.
+   - Filterable by event type and searchable by object ID or message.
+   - Expandable JSON metadata payloads for each event.
+
+5. **Supervisory Factory Controls**:
+   - **Start**: Initiates continuous automated sorting with custom or preset configurations.
+   - **Safe Pause**: Halts input feeding and pauses the robot at defined operation boundaries (prevents dropping objects mid-air).
+   - **Resume**: Restarts continuous feeding from the paused state without lost objects.
+   - **Safe Stop**: Discharges in-flight objects, halts conveyors, and docks robot arm safely at `"home"` pose.
+   - **Reset**: Safely reloads the CoppeliaSim factory scene to a clean baseline and resets all telemetry counters.
+   - **Configure**: Interactive modal to adjust maximum spawn limits, conveyor feed speeds, and color sequence/distribution.
+
+---
+
+### Dashboard Startup & Quickstart Guide
+
+#### 1. Start CoppeliaSim
+Open CoppeliaSim and ensure the factory scene is loaded:
+```text
+scenes/sorting_factory.ttt
+```
+
+#### 2. Start the Backend API & SPA Server
+From the project root:
+```powershell
+python -m uvicorn dashboard.backend.main:app --host 0.0.0.0 --port 8000
+```
+The FastAPI backend connects to CoppeliaSim ZeroMQ Remote API on port 23000 and serves both the REST API, WebSocket gateway, and compiled production dashboard.
+
+#### 3. Access the Dashboard
+Open your web browser and navigate to:
+```text
+http://localhost:8000
+```
+
+#### 4. (Optional) Run Frontend in Vite Development Mode
+If you wish to modify frontend components with hot-module replacement (HMR):
+```powershell
+cd dashboard/frontend
+npm install
+npm run dev
+```
+Navigate to `http://localhost:5173`. The Vite development server proxies API requests to `http://localhost:8000`.
+
+To recompile production assets:
+```powershell
+npm run build
+```
+
+---
+
 ## Test Results Summary
 
 | Test Phase | Scope / Objective | Status | Details |
@@ -237,6 +347,10 @@ When initializing `SortingController` or calling `run_continuous_sorting()`, the
 | **Phase 6 - Test 2** | 12-Block Continuous Stress Run | **PASSED** | **12/12 sorted (4R, 4G, 4B)**; 100% 3D bin containment; 9.58s avg cycle |
 | **Phase 6 - Test 3** | Multi-Trial Stability Run | **PASSED** | 2 consecutive trials (12 blocks total) passed without degradation or memory leak |
 | **Phase 6 - Test 4** | Diagnostics & System Cleanup | **PASSED** | Zero stale handles; zero duplicate IDs; clean unallocation via `destroy_all()` |
+| **Phase 7 - Test 1** | REST API Endpoints | **PASSED** | `/api/health`, `/api/status`, `/api/telemetry`, `/api/camera/frame`, `/api/logs` verified |
+| **Phase 7 - Test 2** | WebSocket Telemetry Stream | **PASSED** | High-frequency telemetry packets received at 10Hz with valid payload structure |
+| **Phase 7 - Test 3** | Factory Configuration Control | **PASSED** | Config payload applied (`max_objects`, conveyor speeds, color distribution) |
+| **Phase 7 - Test 4** | Supervisory Controls & Sorting | **PASSED** | Scene Reset -> Start Sorting -> Safe Boundary Pause -> Resume -> Safe Stop verified |
 
 ---
 
@@ -251,8 +365,11 @@ When initializing `SortingController` or calling `run_continuous_sorting()`, the
    - The spawner verifies $|dx| \ge 0.22\text{m}$ along the infeed belt. If a preceding block is resting or delayed at the inlet, spawn requests return `None` until clearance is achieved.
 4. **Destination Fault**:
    - If a target conveyor handle is invalid or unregistered, the sorting controller halts before moving the arm, preserving system integrity.
+5. **Safe Operation Boundary Pause & Stop**:
+   - When pause or stop is requested via the dashboard, the system does not drop blocks mid-air. It completes any in-flight pick, place, or transport action and executes the pause or stop at cycle boundaries.
 
 ### Known Limitations
+- **Single Remote API Client Serialization**: CoppeliaSim's ZeroMQ Remote API client requires strictly serialized request/reply cycles per socket. Simulation access is marshaled through `FactoryManager`'s background worker and thread-safe locks to prevent concurrent command collisions.
 - **Single Inspection Station**: The current physical cell features one overhead camera at the end bumper. Object classification occurs strictly when the block arrives at the bumper stop.
 - **Single-Arm Throughput Limit**: Because one 6-DOF UR5 arm handles all pick-and-place maneuvers, peak throughput is mechanically bounded at $\approx 6.5\text{ blocks/min}$.
 - **Bin Stacking Height**: While collection bins feature open-top cavities ($0.26 \times 0.26\text{m}$), sorting more than $\approx 16$ blocks of the same color into a single bin may cause stacking that reaches the conveyor discharge level.
@@ -265,6 +382,6 @@ As per instructions, changes are staged locally and not automatically pushed to 
 git status
 git diff
 git add .
-git commit -m "Implement Phase 6: Reliability, stress testing and fault recovery"
+git commit -m "Implement Phase 7: Real-time monitoring dashboard and factory control interface"
 ```
 
